@@ -22,7 +22,7 @@ type ClaudeLLM struct {
 func NewClaudeLLM(apiKey string) *ClaudeLLM {
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 
-	return &ClaudeLLM{client: client}
+	return &ClaudeLLM{client: &client}
 }
 
 // convertToClaudeMessages converts our generic Message type to Claude's message format
@@ -49,23 +49,29 @@ func convertToClaudeMessages(messages []Message) []anthropic.MessageParam {
 			if len(msg.ToolCalls) > 0 && i == len(messages)-1 {
 				continue
 			}
-			
+
 			// If there are tool calls, we need to split this into multiple messages
 			if len(msg.ToolCalls) > 0 {
 				// First message: just the text content if any
 				if msg.Content != "" {
 					claudeMessages = append(claudeMessages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(msg.Content)))
 				}
-				
+
 				// Then for each tool call, create a tool use message
 				for _, tc := range msg.ToolCalls {
 					var args interface{}
 					if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err == nil {
-						// Create the tool use message
-						toolMsg := anthropic.NewAssistantMessage(
-							anthropic.NewToolUseBlockParam(tc.ID, tc.Function.Name, args))
+						// Create the tool use message with proper content block
+						toolUseBlock := &anthropic.ToolUseBlockParam{
+							ID:    tc.ID,
+							Name:  tc.Function.Name,
+							Input: args,
+						}
+						toolMsg := anthropic.NewAssistantMessage(anthropic.ContentBlockParamUnion{
+							OfToolUse: toolUseBlock,
+						})
 						claudeMessages = append(claudeMessages, toolMsg)
-						
+
 						// Add the tool result immediately after if available
 						if result, ok := toolCallMap[tc.Function.Name]; ok {
 							toolResult := anthropic.NewUserMessage(
@@ -105,34 +111,45 @@ func generateJSONSchema[T any]() interface{} {
 }
 
 // convertToClaudeTools converts our generic Tool type to Claude's tool format
-func convertToClaudeTools(tools []Tool) []anthropic.ToolParam {
+func convertToClaudeTools(tools []Tool) []anthropic.ToolUnionParam {
 	if len(tools) == 0 {
 		return nil
 	}
 
-	claudeTools := make([]anthropic.ToolParam, len(tools))
+	claudeTools := make([]anthropic.ToolUnionParam, len(tools))
 	for i, tool := range tools {
 		// Handle parameters based on their type
 		var schema interface{}
 		var params interface{} = tool.Function.Parameters
 		switch params := params.(type) {
 		case string:
-			// If it's already a JSON string, use it directly
-			schema = params
+			// If it's already a JSON string, parse it
+			var parsedSchema interface{}
+			if err := json.Unmarshal([]byte(params), &parsedSchema); err == nil {
+				schema = parsedSchema
+			} else {
+				schema = params
+			}
 		case map[string]interface{}:
-			// For maps, just marshal directly since they should already be in schema format
+			// For maps, use directly since they should already be in schema format
 			schema = params
 		default:
 			// For any other type, generate a schema using reflection
 			schemaObj := generateJSONSchema[interface{}]()
-			jsonBytes, _ := json.Marshal(schemaObj)
-			schema = string(jsonBytes)
+			schema = schemaObj
 		}
 
-		claudeTools[i] = anthropic.ToolParam{
-			Name:        anthropic.F(tool.Function.Name),
-			Description: anthropic.F(tool.Function.Description),
-			InputSchema: anthropic.F(schema),
+		// Create tool parameter with proper input schema
+		toolParam := anthropic.ToolParam{
+			Name:        tool.Function.Name,
+			Description: anthropic.String(tool.Function.Description),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: schema,
+			},
+		}
+
+		claudeTools[i] = anthropic.ToolUnionParam{
+			OfTool: &toolParam,
 		}
 	}
 	return claudeTools
@@ -144,16 +161,17 @@ func convertFromClaudeMessage(msg anthropic.Message) Message {
 	var toolCalls []ToolCall
 
 	for _, block := range msg.Content {
-		switch block := block.AsUnion().(type) {
+		switch block := block.AsAny().(type) {
 		case anthropic.TextBlock:
 			content = block.Text
 		case anthropic.ToolUseBlock:
+			argsBytes, _ := json.Marshal(block.Input)
 			toolCalls = append(toolCalls, ToolCall{
 				ID:   block.ID,
 				Type: "function",
 				Function: ToolCallFunction{
 					Name:      block.Name,
-					Arguments: string(block.Input),
+					Arguments: string(argsBytes),
 				},
 			})
 		}
@@ -189,20 +207,20 @@ func (c *ClaudeLLM) CreateChatCompletion(ctx context.Context, req ChatCompletion
 
 	// Create Claude request
 	claudeReq := anthropic.MessageNewParams{
-		Model:     anthropic.F(req.Model),
-		MaxTokens: anthropic.F(int64(req.MaxTokens)),
-		Messages:  anthropic.F(messages),
-		Tools:     anthropic.F(convertToClaudeTools(req.Tools)),
+		Model:     anthropic.Model(req.Model),
+		MaxTokens: int64(req.MaxTokens),
+		Messages:  messages,
+		Tools:     convertToClaudeTools(req.Tools),
 	}
 
 	if systemPrompt != "" {
-		claudeReq.System = anthropic.F([]anthropic.TextBlockParam{
-			anthropic.NewTextBlock(systemPrompt),
-		})
+		claudeReq.System = []anthropic.TextBlockParam{
+			{Text: systemPrompt},
+		}
 	}
 
 	if req.Temperature > 0 {
-		claudeReq.Temperature = anthropic.F(float64(req.Temperature))
+		claudeReq.Temperature = anthropic.Float(float64(req.Temperature))
 	}
 
 	// Make request to Claude API
@@ -252,20 +270,20 @@ func (c *ClaudeLLM) CreateChatCompletionStream(ctx context.Context, req ChatComp
 
 	// Create Claude streaming request
 	claudeReq := anthropic.MessageNewParams{
-		Model:     anthropic.F(req.Model),
-		MaxTokens: anthropic.F(int64(req.MaxTokens)),
-		Messages:  anthropic.F(messages),
-		Tools:     anthropic.F(convertToClaudeTools(req.Tools)),
+		Model:     anthropic.Model(req.Model),
+		MaxTokens: int64(req.MaxTokens),
+		Messages:  messages,
+		Tools:     convertToClaudeTools(req.Tools),
 	}
 
 	if systemPrompt != "" {
-		claudeReq.System = anthropic.F([]anthropic.TextBlockParam{
-			anthropic.NewTextBlock(systemPrompt),
-		})
+		claudeReq.System = []anthropic.TextBlockParam{
+			{Text: systemPrompt},
+		}
 	}
 
 	if req.Temperature > 0 {
-		claudeReq.Temperature = anthropic.F(float64(req.Temperature))
+		claudeReq.Temperature = anthropic.Float(float64(req.Temperature))
 	}
 
 	// Create streaming response
@@ -281,7 +299,7 @@ func (c *ClaudeLLM) CreateChatCompletionStream(ctx context.Context, req ChatComp
 
 // claudeStreamWrapper wraps Claude's stream to implement our ChatCompletionStream interface
 type claudeStreamWrapper struct {
-	stream          *ssestream.Stream[anthropic.MessageStreamEvent]
+	stream          *ssestream.Stream[anthropic.MessageStreamEventUnion]
 	message         anthropic.Message
 	currentToolCall *ToolCall
 	currentContent  string
@@ -306,28 +324,30 @@ func (w *claudeStreamWrapper) Recv() (ChatCompletionResponse, error) {
 		Content: w.currentContent,
 	}
 
-	switch event := event.AsUnion().(type) {
+	switch event := event.AsAny().(type) {
 	case anthropic.ContentBlockStartEvent:
-		if string(event.ContentBlock.Type) == string(anthropic.ContentBlockTypeToolUse) {
+		// Check if this is a tool use block by trying to cast the content block
+		if toolUseBlock, ok := event.ContentBlock.AsAny().(anthropic.ToolUseBlock); ok {
 			w.currentToolCall = &ToolCall{
-				ID:   event.ContentBlock.ID,
+				ID:   toolUseBlock.ID,
 				Type: "function",
 				Function: ToolCallFunction{
-					Name: event.ContentBlock.Name,
+					Name: toolUseBlock.Name,
 				},
 			}
 		}
 	case anthropic.ContentBlockDeltaEvent:
-		delta := event.Delta
-		if delta.Text != "" {
+		switch delta := event.Delta.AsAny().(type) {
+		case anthropic.TextDelta:
 			w.currentContent += delta.Text
 			message.Content = w.currentContent
-		}
-		if delta.PartialJSON != "" && w.currentToolCall != nil {
-			if w.currentToolCall.Function.Arguments == "" {
-				w.currentToolCall.Function.Arguments = delta.PartialJSON
-			} else {
-				w.currentToolCall.Function.Arguments += delta.PartialJSON
+		case anthropic.InputJSONDelta:
+			if w.currentToolCall != nil {
+				if w.currentToolCall.Function.Arguments == "" {
+					w.currentToolCall.Function.Arguments = delta.PartialJSON
+				} else {
+					w.currentToolCall.Function.Arguments += delta.PartialJSON
+				}
 			}
 		}
 	case anthropic.ContentBlockStopEvent:

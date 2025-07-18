@@ -539,10 +539,22 @@ func (so *StreamOrchestrator) processToolCalls(
 				// Notify handler of agent transition
 				so.handler.OnAgentTransition(streamCtx.Agent, handoffCtx.TargetAgent, so.handoffMgr.GetDepth())
 
-				// Create new stream context for handed-off agent
+				// Create fresh message context for handed-off agent with only the transfer data
+				var newMessages []llm.Message
+				if handoffCtx.TransferData != nil {
+					transferContent := fmt.Sprintf("%v", handoffCtx.TransferData)
+					newMessages = []llm.Message{
+						{
+							Role:    llm.RoleUser,
+							Content: transferContent,
+						},
+					}
+				}
+
+				// Create new stream context for handed-off agent with cleared context
 				newStreamCtx := &StreamContext{
 					Agent:             handoffCtx.TargetAgent,
-					Messages:          *allMessages,
+					Messages:          newMessages, // Fresh context with only transfer data
 					ContextVariables:  handoffCtx.ContextVariables,
 					HandoffDepth:      streamCtx.HandoffDepth + 1,
 					FunctionCallCount: streamCtx.FunctionCallCount,

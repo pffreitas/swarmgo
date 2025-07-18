@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/prathyushnallamothu/swarmgo/llm"
+	"github.com/pffreitas/swarmgo/llm"
 )
 
 // LangGraph inspired workflow system

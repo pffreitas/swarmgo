@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	swarmgo "github.com/prathyushnallamothu/swarmgo"
-	"github.com/prathyushnallamothu/swarmgo/llm"
+	swarmgo "github.com/pffreitas/swarmgo"
+	"github.com/pffreitas/swarmgo/llm"
 )
 
 // Medical clinic workflow example using the new LangGraph-inspired workflow system

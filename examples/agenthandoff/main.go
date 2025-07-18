@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	dotenv "github.com/joho/godotenv"
-	swarmgo "github.com/prathyushnallamothu/swarmgo"
-	"github.com/prathyushnallamothu/swarmgo/llm"
+	swarmgo "github.com/pffreitas/swarmgo"
+	"github.com/pffreitas/swarmgo/llm"
 )
 
 // Enhanced StreamHandler that logs agent transitions

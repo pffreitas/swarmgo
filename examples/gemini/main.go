@@ -7,8 +7,8 @@ import (
 	"os"
 
 	dotenv "github.com/joho/godotenv"
-	swarmgo "github.com/prathyushnallamothu/swarmgo"
-	"github.com/prathyushnallamothu/swarmgo/llm"
+	swarmgo "github.com/pffreitas/swarmgo"
+	"github.com/pffreitas/swarmgo/llm"
 )
 
 // WeatherRequest represents the parameters for the getWeather function
@@ -46,39 +46,39 @@ func main() {
 
 	fmt.Println(response.Messages[len(response.Messages)-1].Content)
 
-/* 	// Example 2: Function calling
-	fmt.Println("\nExample 2: Function Calling")
+	/* 	// Example 2: Function calling
+	   	fmt.Println("\nExample 2: Function Calling")
 
-	weatherAgent := &swarmgo.Agent{
-		Name:         "WeatherAgent",
-		Instructions: "You are a weather assistant. When asked about weather, always use the getWeather function.",
-		Model:        "gemini-pro",
-		Functions: []swarmgo.AgentFunction{
-			{
-				Name:        "getWeather",
-				Description: "Get the current weather for a location",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"location": map[string]interface{}{
-							"type":        "string",
-							"description": "The city and state/country",
-						},
-					},
-					"required": []interface{}{"location"},
-				},
-				Function: func(args map[string]interface{}, contextVariables map[string]interface{}) swarmgo.Result {
-					location := args["location"].(string)
-					return swarmgo.Result{
-						Success: true,
-						Data:    fmt.Sprintf(`{"location": "%s", "temperature": "65"}`, location),
-					}
-				},
-			},
-		},
-	}
+	   	weatherAgent := &swarmgo.Agent{
+	   		Name:         "WeatherAgent",
+	   		Instructions: "You are a weather assistant. When asked about weather, always use the getWeather function.",
+	   		Model:        "gemini-pro",
+	   		Functions: []swarmgo.AgentFunction{
+	   			{
+	   				Name:        "getWeather",
+	   				Description: "Get the current weather for a location",
+	   				Parameters: map[string]interface{}{
+	   					"type": "object",
+	   					"properties": map[string]interface{}{
+	   						"location": map[string]interface{}{
+	   							"type":        "string",
+	   							"description": "The city and state/country",
+	   						},
+	   					},
+	   					"required": []interface{}{"location"},
+	   				},
+	   				Function: func(args map[string]interface{}, contextVariables map[string]interface{}) swarmgo.Result {
+	   					location := args["location"].(string)
+	   					return swarmgo.Result{
+	   						Success: true,
+	   						Data:    fmt.Sprintf(`{"location": "%s", "temperature": "65"}`, location),
+	   					}
+	   				},
+	   			},
+	   		},
+	   	}
 
-	swarmgo.RunDemoLoop(swarm, weatherAgent) */
+	   	swarmgo.RunDemoLoop(swarm, weatherAgent) */
 
 	// Example 3: Streaming completion
 	fmt.Println("\nExample 3: Streaming Completion")

@@ -6,8 +6,8 @@ import (
 	"os"
 
 	dotenv "github.com/joho/godotenv"
-	swarmgo "github.com/prathyushnallamothu/swarmgo"
-	"github.com/prathyushnallamothu/swarmgo/llm"
+	swarmgo "github.com/pffreitas/swarmgo"
+	"github.com/pffreitas/swarmgo/llm"
 )
 
 func calculateSum(args map[string]interface{}, contextVariables map[string]interface{}) swarmgo.Result {
@@ -113,7 +113,7 @@ func main() {
 		fmt.Printf("\nTool: %s\n", result.ToolName)
 		fmt.Printf("Arguments: %v\n", result.Args)
 		fmt.Printf("Result: %v\n", result.Result.Data)
-		
+
 		// You can also check if the tool call was successful
 		if result.Result.Success {
 			fmt.Printf("Status: Success\n")

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/prathyushnallamothu/swarmgo/llm"
+	"github.com/pffreitas/swarmgo/llm"
 )
 
 // WorkflowType defines the type of agent interaction pattern
@@ -58,7 +58,6 @@ type Workflow struct {
 	currentStep   int                                 // Current step number
 }
 
-
 // NewWorkflow initializes a new Workflow instance.
 func NewWorkflow(apikey string, provider llm.LLMProvider, workflowType WorkflowType) *Workflow {
 	swarm := NewSwarm(apikey, provider)
@@ -85,7 +84,6 @@ func (wf *Workflow) SetCycleCallback(callback func(from, to string) (bool, error
 func (wf *Workflow) SetCycleHandling(handling CycleHandling) {
 	wf.cycleHandling = handling
 }
-
 
 // logTransition logs agent transitions for debugging
 func (wf *Workflow) logTransition(from, to string, reason string) {
@@ -157,7 +155,6 @@ func (wf *Workflow) Execute(startAgent string, userRequest string) (*WorkflowRes
 		return result, errors.New("startAgent does not exist")
 	}
 
-
 	messageHistory := []llm.Message{{Role: llm.RoleUser, Content: userRequest}}
 	visited := make(map[string]bool)
 	cycleCount := make(map[string]int)
@@ -174,12 +171,10 @@ func (wf *Workflow) Execute(startAgent string, userRequest string) (*WorkflowRes
 			StepNumber: wf.currentStep + 1,
 		}
 
-
 		// Execute current agent
 		fmt.Printf("\033[96mExecuting agent: %s (Step %d)\033[0m\n", wf.currentAgent, stepResult.StepNumber)
 		response, err := wf.executeAgent(wf.currentAgent, messageHistory)
 		stepResult.EndTime = time.Now()
-
 
 		if err != nil {
 			stepResult.Error = err
@@ -191,7 +186,6 @@ func (wf *Workflow) Execute(startAgent string, userRequest string) (*WorkflowRes
 
 		stepResult.Output = response
 		messageHistory = append(messageHistory, response...)
-
 
 		// Determine next agent
 		nextAgent, shouldContinue := wf.routeToNextAgent(wf.currentAgent, messageHistory)

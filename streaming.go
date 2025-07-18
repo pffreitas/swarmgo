@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/prathyushnallamothu/swarmgo/llm"
+	"github.com/pffreitas/swarmgo/llm"
 )
 
 // StreamHandler represents a handler for streaming responses with enhanced agent support

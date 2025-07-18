@@ -1,4 +1,5 @@
 ![Swarmgo Logo](assets/logo.png)
+
 # SwarmGo (agents-sdk-go)
 
 SwarmGo is a Go package that allows you to create AI agents capable of interacting, coordinating, and executing tasks. Inspired by OpenAI's Swarm framework, SwarmGo focuses on making agent coordination and execution lightweight, highly controllable, and easily testable.
@@ -40,10 +41,11 @@ SwarmGo runs (almost) entirely on the client and, much like the Chat Completions
 ## Installation
 
 ```bash
-go get github.com/prathyushnallamothu/swarmgo
+go get github.com/pffreitas/swarmgo
 ```
 
 ## Quick Start
+
 Here's a simple example to get you started:
 
 ```go
@@ -54,9 +56,9 @@ import (
 	"fmt"
 	"log"
 
-	swarmgo "github.com/prathyushnallamothu/swarmgo"
+	swarmgo "github.com/pffreitas/swarmgo"
 	openai "github.com/sashabaranov/go-openai"
-	llm "github.com/prathyushnallamothu/swarmgo/llm"
+	llm "github.com/pffreitas/swarmgo/llm"
 )
 
 func main() {
@@ -206,7 +208,6 @@ agent.Functions = append(agent.Functions, swarmgo.AgentFunction{
 })
 ```
 
-
 ## Streaming Support
 
 SwarmGo now includes built-in support for streaming responses, allowing real-time processing of AI responses and tool calls. This is particularly useful for long-running operations or when you want to provide immediate feedback to users.
@@ -278,8 +279,8 @@ err := client.StreamingResponse(
     true,
 )
 ```
-For a complete example of file analysis with streaming, see [examples/file_analyzer_stream/main.go](examples/file_analyzer_stream/main.go).
 
+For a complete example of file analysis with streaming, see [examples/file_analyzer_stream/main.go](examples/file_analyzer_stream/main.go).
 
 ### Concurrent Agent Execution
 
@@ -327,6 +328,7 @@ for _, result := range results {
 ```
 
 Key features of concurrent execution:
+
 - Run multiple agents in parallel with independent configurations
 - Context-based timeout and cancellation support
 - Thread-safe result collection
@@ -334,7 +336,6 @@ Key features of concurrent execution:
 - Error handling for individual agent failures
 
 See the `examples/concurrent_analyzer/main.go` for a complete example of concurrent code analysis using multiple specialized agents.
-
 
 ## Memory Management
 
@@ -363,6 +364,7 @@ preferences := agent.Memory.SearchMemories("preference", nil)
 ```
 
 Key features of the memory system:
+
 - **Automatic Memory Management**: Conversations and tool interactions are automatically stored
 - **Memory Types**: Organize memories by type (conversation, fact, tool_result, etc.)
 - **Context Association**: Link memories with relevant context
@@ -397,7 +399,9 @@ Workflows in SwarmGo provide structured patterns for organizing and coordinating
 Each workflow type serves a different organizational need:
 
 ### 1. Supervisor Workflow
+
 A hierarchical pattern where a supervisor agent oversees and coordinates tasks among worker agents. This is ideal for:
+
 - Task delegation and monitoring
 - Quality control and oversight
 - Centralized decision making
@@ -420,7 +424,9 @@ workflow.ConnectAgents(supervisorAgent.Name, workerAgent2.Name)
 ```
 
 ### 2. Hierarchical Workflow
+
 A tree-like structure where tasks flow from top to bottom through multiple levels. This pattern is best for:
+
 - Complex task decomposition
 - Specialized agent roles at each level
 - Clear reporting structures
@@ -440,7 +446,9 @@ workflow.ConnectAgents(researchAgent.Name, analysisAgent.Name)
 ```
 
 ### 3. Collaborative Workflow
+
 A peer-based pattern where agents work together as equals, passing tasks between them as needed. This approach excels at:
+
 - Team-based problem solving
 - Parallel processing
 - Iterative refinement
@@ -461,6 +469,7 @@ workflow.ConnectAgents(writer.Name, editor.Name)
 ```
 
 Key workflow features:
+
 - **Team Management**: Organize agents into functional teams
 - **Leadership Roles**: Designate team leaders for coordination
 - **Flexible Routing**: Dynamic task routing between agents
@@ -473,6 +482,7 @@ Key workflow features:
 For more examples, see the [examples](examples) directory.
 
 ## Contributing
+
 Contributions are welcome! Please follow these steps:
 
 1. Fork the repository.

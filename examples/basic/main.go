@@ -6,14 +6,14 @@ import (
 	"os"
 
 	dotenv "github.com/joho/godotenv"
-	swarmgo "github.com/prathyushnallamothu/swarmgo"
-	"github.com/prathyushnallamothu/swarmgo/llm"
+	swarmgo "github.com/pffreitas/swarmgo"
+	"github.com/pffreitas/swarmgo/llm"
 )
 
 func main() {
 	dotenv.Load()
 
-	client := swarmgo.NewSwarm(os.Getenv("OPENAI_API_KEY"),llm.OpenAI)
+	client := swarmgo.NewSwarm(os.Getenv("OPENAI_API_KEY"), llm.OpenAI)
 
 	agent := &swarmgo.Agent{
 		Name:         "Agent",

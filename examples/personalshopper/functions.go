@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/prathyushnallamothu/swarmgo"
+	"github.com/pffreitas/swarmgo"
 )
 
 func refundItem(args map[string]interface{}, contextVariables map[string]interface{}) swarmgo.Result {
@@ -38,7 +38,7 @@ func refundItem(args map[string]interface{}, contextVariables map[string]interfa
 	fmt.Printf("Refunding $%.2f to user ID %d for item ID %d.\n", amount, userID, itemID)
 	fmt.Println("Refund initiated")
 
-	return swarmgo.Result{Success: true,Data: "Refund initiated successfully."}
+	return swarmgo.Result{Success: true, Data: "Refund initiated successfully."}
 }
 
 func notifyCustomer(args map[string]interface{}, contextVariables map[string]interface{}) swarmgo.Result {

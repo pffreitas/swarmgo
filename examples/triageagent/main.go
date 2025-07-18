@@ -5,8 +5,8 @@ import (
 	"os"
 
 	dotenv "github.com/joho/godotenv"
-	swarmgo "github.com/prathyushnallamothu/swarmgo"
-	"github.com/prathyushnallamothu/swarmgo/llm"
+	swarmgo "github.com/pffreitas/swarmgo"
+	"github.com/pffreitas/swarmgo/llm"
 )
 
 func processRefund(args map[string]interface{}, contextVariables map[string]interface{}) swarmgo.Result {

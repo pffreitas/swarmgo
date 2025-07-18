@@ -51,14 +51,74 @@ func DefaultStreamingLimits() StreamingLimits {
 	}
 }
 
-// StreamContext represents the current streaming context
-type StreamContext struct {
-	Agent             *Agent
-	Messages          []llm.Message
-	ContextVariables  map[string]interface{}
-	HandoffDepth      int
-	FunctionCallCount int
-	ParentContext     *StreamContext // For returning from hand-offs
+// AgentContext represents the context for a single agent in the stack
+type AgentContext struct {
+	Agent            *Agent
+	Messages         []llm.Message
+	ContextVariables map[string]interface{}
+	Model            string
+	CurrentMessage   llm.Message // Current message being built
+}
+
+// AgentStack manages the stack of agent contexts
+type AgentStack struct {
+	contexts []*AgentContext
+	limits   StreamingLimits
+}
+
+// NewAgentStack creates a new agent stack
+func NewAgentStack(limits StreamingLimits) *AgentStack {
+	return &AgentStack{
+		contexts: make([]*AgentContext, 0),
+		limits:   limits,
+	}
+}
+
+// Push adds a new agent context to the stack
+func (as *AgentStack) Push(ctx *AgentContext) error {
+	if len(as.contexts) >= as.limits.MaxHandoffDepth {
+		return fmt.Errorf("maximum hand-off depth of %d reached", as.limits.MaxHandoffDepth)
+	}
+	as.contexts = append(as.contexts, ctx)
+	return nil
+}
+
+// Pop removes the top agent context from the stack
+func (as *AgentStack) Pop() *AgentContext {
+	if len(as.contexts) == 0 {
+		return nil
+	}
+	ctx := as.contexts[len(as.contexts)-1]
+	as.contexts = as.contexts[:len(as.contexts)-1]
+	return ctx
+}
+
+// Current returns the current (top) agent context
+func (as *AgentStack) Current() *AgentContext {
+	if len(as.contexts) == 0 {
+		return nil
+	}
+	return as.contexts[len(as.contexts)-1]
+}
+
+// Depth returns the current stack depth
+func (as *AgentStack) Depth() int {
+	return len(as.contexts)
+}
+
+// IsEmpty returns true if the stack is empty
+func (as *AgentStack) IsEmpty() bool {
+	return len(as.contexts) == 0
+}
+
+// FindAgentInStack searches for an agent in the stack and returns its position (-1 if not found)
+func (as *AgentStack) FindAgentInStack(targetAgent *Agent) int {
+	for i := len(as.contexts) - 1; i >= 0; i-- {
+		if as.contexts[i].Agent == targetAgent {
+			return i
+		}
+	}
+	return -1
 }
 
 // HandoffContext represents context for agent hand-offs
@@ -77,80 +137,6 @@ type ToolCallExecution struct {
 	Arguments  map[string]interface{}
 	IsComplete bool
 	Result     Result
-}
-
-// HandoffManager manages agent transitions and depth tracking
-type HandoffManager struct {
-	limits       StreamingLimits
-	currentDepth int
-	callCount    int
-	contextStack []*StreamContext
-}
-
-// NewHandoffManager creates a new HandoffManager
-func NewHandoffManager(limits StreamingLimits) *HandoffManager {
-	return &HandoffManager{
-		limits:       limits,
-		currentDepth: 0,
-		callCount:    0,
-		contextStack: make([]*StreamContext, 0),
-	}
-}
-
-// CanHandoff checks if a hand-off is allowed
-func (hm *HandoffManager) CanHandoff() bool {
-	return hm.currentDepth < hm.limits.MaxHandoffDepth
-}
-
-// CanExecuteFunction checks if another function call is allowed
-func (hm *HandoffManager) CanExecuteFunction() bool {
-	return hm.callCount < hm.limits.MaxFunctionCalls
-}
-
-// PushContext adds a new context to the stack
-func (hm *HandoffManager) PushContext(ctx *StreamContext) error {
-	if !hm.CanHandoff() {
-		return fmt.Errorf("maximum hand-off depth of %d reached", hm.limits.MaxHandoffDepth)
-	}
-
-	hm.contextStack = append(hm.contextStack, ctx)
-	hm.currentDepth++
-	return nil
-}
-
-// PopContext removes the current context from the stack
-func (hm *HandoffManager) PopContext() *StreamContext {
-	if len(hm.contextStack) == 0 {
-		return nil
-	}
-
-	ctx := hm.contextStack[len(hm.contextStack)-1]
-	hm.contextStack = hm.contextStack[:len(hm.contextStack)-1]
-	hm.currentDepth--
-	return ctx
-}
-
-// CurrentContext returns the current context
-func (hm *HandoffManager) CurrentContext() *StreamContext {
-	if len(hm.contextStack) == 0 {
-		return nil
-	}
-	return hm.contextStack[len(hm.contextStack)-1]
-}
-
-// IncrementCallCount increments the function call counter
-func (hm *HandoffManager) IncrementCallCount() {
-	hm.callCount++
-}
-
-// GetCallCount returns the current function call count
-func (hm *HandoffManager) GetCallCount() int {
-	return hm.callCount
-}
-
-// GetDepth returns the current hand-off depth
-func (hm *HandoffManager) GetDepth() int {
-	return hm.currentDepth
 }
 
 // ToolCallManager manages tool call execution and tracking
@@ -244,11 +230,12 @@ func (tcm *ToolCallManager) MarkAsProcessed(toolCallID string) {
 
 // StreamOrchestrator is the main coordinator for streaming operations
 type StreamOrchestrator struct {
-	client      llm.LLM
-	handoffMgr  *HandoffManager
-	toolCallMgr *ToolCallManager
-	handler     StreamHandler
-	debug       bool
+	client            llm.LLM
+	agentStack        *AgentStack
+	toolCallMgr       *ToolCallManager
+	handler           StreamHandler
+	debug             bool
+	functionCallCount int
 }
 
 // NewStreamOrchestrator creates a new StreamOrchestrator
@@ -258,23 +245,24 @@ func NewStreamOrchestrator(client llm.LLM, limits StreamingLimits, handler Strea
 	}
 
 	return &StreamOrchestrator{
-		client:      client,
-		handoffMgr:  NewHandoffManager(limits),
-		toolCallMgr: NewToolCallManager(),
-		handler:     handler,
-		debug:       debug,
+		client:            client,
+		agentStack:        NewAgentStack(limits),
+		toolCallMgr:       NewToolCallManager(),
+		handler:           handler,
+		debug:             debug,
+		functionCallCount: 0,
 	}
 }
 
 // ExecuteToolCall executes a single tool call and handles potential hand-offs
-func (so *StreamOrchestrator) ExecuteToolCall(ctx context.Context, execution *ToolCallExecution, streamCtx *StreamContext) (*HandoffContext, error) {
+func (so *StreamOrchestrator) ExecuteToolCall(ctx context.Context, execution *ToolCallExecution, agentCtx *AgentContext) (*HandoffContext, error) {
 	if execution.Function == nil {
 		return nil, fmt.Errorf("unknown function: %s", execution.ToolCall.Function.Name)
 	}
 
-	if !so.handoffMgr.CanExecuteFunction() {
-		so.handler.OnFunctionCallLimitReached(so.handoffMgr.limits.MaxFunctionCalls)
-		return nil, fmt.Errorf("maximum function call limit of %d reached", so.handoffMgr.limits.MaxFunctionCalls)
+	if so.functionCallCount >= so.agentStack.limits.MaxFunctionCalls {
+		so.handler.OnFunctionCallLimitReached(so.agentStack.limits.MaxFunctionCalls)
+		return nil, fmt.Errorf("maximum function call limit of %d reached", so.agentStack.limits.MaxFunctionCalls)
 	}
 
 	if so.debug {
@@ -282,29 +270,24 @@ func (so *StreamOrchestrator) ExecuteToolCall(ctx context.Context, execution *To
 	}
 
 	// Execute the function
-	result := execution.Function.Function(execution.Arguments, streamCtx.ContextVariables)
+	result := execution.Function.Function(execution.Arguments, agentCtx.ContextVariables)
 	execution.Result = result
 
 	// Increment call count
-	so.handoffMgr.IncrementCallCount()
+	so.functionCallCount++
 
 	// Check for agent hand-off
 	if result.Agent != nil {
-		if !so.handoffMgr.CanHandoff() {
-			so.handler.OnDepthLimitReached(so.handoffMgr.limits.MaxHandoffDepth)
-			return nil, fmt.Errorf("maximum hand-off depth of %d reached", so.handoffMgr.limits.MaxHandoffDepth)
-		}
-
 		// Create hand-off context
 		handoffCtx := &HandoffContext{
 			TargetAgent:      result.Agent,
 			TransferData:     result.Data,
 			ContextVariables: make(map[string]interface{}),
-			ReturnToParent:   true, // Allow the handed-off agent to decide
+			ReturnToParent:   true,
 		}
 
 		// Copy context variables for transfer
-		for k, v := range streamCtx.ContextVariables {
+		for k, v := range agentCtx.ContextVariables {
 			handoffCtx.ContextVariables[k] = v
 		}
 
@@ -343,109 +326,143 @@ func (s *Swarm) StreamingResponseWithLimits(
 ) error {
 	orchestrator := NewStreamOrchestrator(s.client, limits, handler, debug)
 
-	// Create initial stream context
-	initialContext := &StreamContext{
-		Agent:             agent,
-		Messages:          messages,
-		ContextVariables:  contextVariables,
-		HandoffDepth:      0,
-		FunctionCallCount: 0,
-		ParentContext:     nil,
-	}
-
-	return orchestrator.ProcessStreamContext(ctx, initialContext, modelOverride)
-}
-
-// ProcessStreamContext processes a single stream context (recursive for hand-offs)
-func (so *StreamOrchestrator) ProcessStreamContext(ctx context.Context, streamCtx *StreamContext, modelOverride string) error {
-	// Push context to stack
-	if err := so.handoffMgr.PushContext(streamCtx); err != nil {
-		so.handler.OnError(err)
-		return err
-	}
-	defer so.handoffMgr.PopContext()
-
-	if so.debug {
-		fmt.Printf("Debug: Processing stream context for agent: %s (depth: %d)\n",
-			streamCtx.Agent.Name, so.handoffMgr.GetDepth())
-	}
-
-	// Prepare the initial system message with agent instructions
-	instructions := streamCtx.Agent.Instructions
-	if streamCtx.Agent.InstructionsFunc != nil {
-		instructions = streamCtx.Agent.InstructionsFunc(streamCtx.ContextVariables)
-	}
-
-	allMessages := append([]llm.Message{
-		{
-			Role:    llm.RoleSystem,
-			Content: instructions,
-		},
-	}, streamCtx.Messages...)
-
-	// Build tool definitions
-	var tools []llm.Tool
-	for _, af := range streamCtx.Agent.Functions {
-		def := FunctionToDefinition(af)
-		if so.debug {
-			fmt.Printf("Debug: Adding tool: %s\n", def.Name)
-		}
-		tools = append(tools, llm.Tool{
-			Type: "function",
-			Function: &llm.Function{
-				Name:        def.Name,
-				Description: def.Description,
-				Parameters:  def.Parameters,
-			},
-		})
-	}
-
-	// Prepare the streaming request
-	model := streamCtx.Agent.Model
+	// Create initial agent context
+	model := agent.Model
 	if modelOverride != "" {
 		model = modelOverride
 	}
 
-	req := llm.ChatCompletionRequest{
-		Model:    model,
-		Messages: allMessages,
-		Tools:    tools,
-		Stream:   true,
+	initialContext := &AgentContext{
+		Agent:            agent,
+		Messages:         messages,
+		ContextVariables: contextVariables,
+		Model:            model,
+		CurrentMessage:   llm.Message{Role: llm.RoleAssistant, Name: agent.Name},
 	}
 
-	stream, err := so.client.CreateChatCompletionStream(ctx, req)
-	if err != nil {
-		if so.debug {
-			fmt.Printf("Debug: Stream creation error: %v\n", err)
-		}
-		so.handler.OnError(fmt.Errorf("failed to create chat completion stream: %v", err))
+	// Push initial context to stack
+	if err := orchestrator.agentStack.Push(initialContext); err != nil {
+		handler.OnError(err)
 		return err
 	}
-	defer stream.Close()
 
+	// Start the main processing loop
+	return orchestrator.ProcessAgentStack(ctx)
+}
+
+// ProcessAgentStack processes the agent stack with stream creation inside the loop
+func (so *StreamOrchestrator) ProcessAgentStack(ctx context.Context) error {
 	so.handler.OnStart()
 
-	var currentMessage llm.Message
-	currentMessage.Role = llm.RoleAssistant
-	currentMessage.Name = streamCtx.Agent.Name
+	// Main processing loop
+	for !so.agentStack.IsEmpty() {
+		// Get current agent context
+		currentCtx := so.agentStack.Current()
+		if currentCtx == nil {
+			break
+		}
 
+		if so.debug {
+			fmt.Printf("Debug: Processing agent: %s (stack depth: %d)\n",
+				currentCtx.Agent.Name, so.agentStack.Depth())
+		}
+
+		// Prepare messages with agent instructions
+		instructions := currentCtx.Agent.Instructions
+		if currentCtx.Agent.InstructionsFunc != nil {
+			instructions = currentCtx.Agent.InstructionsFunc(currentCtx.ContextVariables)
+		}
+
+		allMessages := append([]llm.Message{
+			{
+				Role:    llm.RoleSystem,
+				Content: instructions,
+			},
+		}, currentCtx.Messages...)
+
+		// Build tool definitions
+		var tools []llm.Tool
+		for _, af := range currentCtx.Agent.Functions {
+			def := FunctionToDefinition(af)
+			if so.debug {
+				fmt.Printf("Debug: Adding tool: %s\n", def.Name)
+			}
+			tools = append(tools, llm.Tool{
+				Type: "function",
+				Function: &llm.Function{
+					Name:        def.Name,
+					Description: def.Description,
+					Parameters:  def.Parameters,
+				},
+			})
+		}
+
+		// Create streaming request
+		req := llm.ChatCompletionRequest{
+			Model:    currentCtx.Model,
+			Messages: allMessages,
+			Tools:    tools,
+			Stream:   true,
+		}
+
+		// Create stream inside the loop
+		stream, err := so.client.CreateChatCompletionStream(ctx, req)
+		if err != nil {
+			if so.debug {
+				fmt.Printf("Debug: Stream creation error: %v\n", err)
+			}
+			so.handler.OnError(fmt.Errorf("failed to create chat completion stream: %v", err))
+			return err
+		}
+
+		// Process this agent's stream
+		agentHandoff, err := so.processAgentStream(ctx, stream, currentCtx)
+		stream.Close()
+
+		if err != nil {
+			so.handler.OnError(err)
+			return err
+		}
+
+		// Handle agent handoff if one occurred
+		if agentHandoff != nil {
+			if err := so.handleAgentHandoff(agentHandoff, currentCtx); err != nil {
+				so.handler.OnError(err)
+				return err
+			}
+		} else {
+			// No handoff, complete this agent and pop from stack
+			so.handler.OnComplete(currentCtx.CurrentMessage)
+			so.agentStack.Pop()
+
+			// If there's a parent agent, add the response to its context
+			if !so.agentStack.IsEmpty() {
+				parentCtx := so.agentStack.Current()
+				parentCtx.Messages = append(parentCtx.Messages, currentCtx.CurrentMessage)
+			}
+		}
+	}
+
+	return nil
+}
+
+// processAgentStream processes a single agent's stream until completion or handoff
+func (so *StreamOrchestrator) processAgentStream(ctx context.Context, stream llm.ChatCompletionStream, agentCtx *AgentContext) (*HandoffContext, error) {
 	for {
 		select {
 		case <-ctx.Done():
-			so.handler.OnError(ctx.Err())
-			return ctx.Err()
+			return nil, ctx.Err()
 		default:
 			response, err := stream.Recv()
 			if err != nil {
 				if err.Error() == "EOF" {
-					so.handler.OnComplete(currentMessage)
-					return nil
+					// Stream completed normally
+					return nil, nil
 				}
 				if so.debug {
 					fmt.Printf("Debug: Error receiving from stream: %v\n", err)
 				}
-				so.handler.OnError(fmt.Errorf("error receiving from stream: %v", err))
-				return err
+				return nil, fmt.Errorf("error receiving from stream: %v", err)
 			}
 
 			if len(response.Choices) == 0 {
@@ -456,37 +473,38 @@ func (so *StreamOrchestrator) ProcessStreamContext(ctx context.Context, streamCt
 
 			// Handle content streaming
 			if choice.Message.Content != "" {
-				currentMessage.Content += choice.Message.Content
+				agentCtx.CurrentMessage.Content += choice.Message.Content
 				so.handler.OnToken(choice.Message.Content)
 			}
 
 			// Handle tool calls
 			if len(choice.Message.ToolCalls) > 0 {
-				if err := so.processToolCalls(ctx, choice.Message.ToolCalls, streamCtx, &currentMessage, &allMessages, modelOverride); err != nil {
-					so.handler.OnError(err)
-					return err
+				handoff, err := so.processToolCallsInStream(ctx, choice.Message.ToolCalls, agentCtx)
+				if err != nil {
+					return nil, err
+				}
+				if handoff != nil {
+					// Tool call resulted in handoff, return it
+					return handoff, nil
 				}
 			}
 		}
 	}
 }
 
-// processToolCalls handles tool call processing and potential hand-offs
-func (so *StreamOrchestrator) processToolCalls(
+// processToolCallsInStream processes tool calls within a stream
+func (so *StreamOrchestrator) processToolCallsInStream(
 	ctx context.Context,
 	toolCalls []llm.ToolCall,
-	streamCtx *StreamContext,
-	currentMessage *llm.Message,
-	allMessages *[]llm.Message,
-	modelOverride string,
-) error {
+	agentCtx *AgentContext,
+) (*HandoffContext, error) {
 	for _, toolCall := range toolCalls {
 		if so.debug {
 			fmt.Printf("Debug: Processing tool call: ID=%s Name=%s\n", toolCall.ID, toolCall.Function.Name)
 		}
 
 		// Process tool call delta
-		execution, isComplete := so.toolCallMgr.ProcessToolCallDelta(toolCall, streamCtx.Agent.Functions)
+		execution, isComplete := so.toolCallMgr.ProcessToolCallDelta(toolCall, agentCtx.Agent.Functions)
 		if execution == nil {
 			continue
 		}
@@ -497,11 +515,11 @@ func (so *StreamOrchestrator) processToolCalls(
 			so.toolCallMgr.MarkAsProcessed(execution.ID)
 
 			// Add to current message
-			currentMessage.ToolCalls = append(currentMessage.ToolCalls, execution.ToolCall)
+			agentCtx.CurrentMessage.ToolCalls = append(agentCtx.CurrentMessage.ToolCalls, execution.ToolCall)
 			so.handler.OnToolCall(execution.ToolCall)
 
 			// Execute the tool call
-			handoffCtx, err := so.ExecuteToolCall(ctx, execution, streamCtx)
+			handoffCtx, err := so.ExecuteToolCall(ctx, execution, agentCtx)
 			if err != nil {
 				// Create error function response message
 				errorMsg := llm.Message{
@@ -509,7 +527,13 @@ func (so *StreamOrchestrator) processToolCalls(
 					Content: fmt.Sprintf("Error: %v", err),
 					Name:    execution.Function.Name,
 				}
-				*allMessages = append(*allMessages, *currentMessage, errorMsg)
+				agentCtx.Messages = append(agentCtx.Messages, agentCtx.CurrentMessage, errorMsg)
+
+				// Reset current message
+				agentCtx.CurrentMessage = llm.Message{
+					Role: llm.RoleAssistant,
+					Name: agentCtx.Agent.Name,
+				}
 				continue
 			}
 
@@ -527,62 +551,106 @@ func (so *StreamOrchestrator) processToolCalls(
 				Name:    execution.Function.Name,
 			}
 
-			*allMessages = append(*allMessages, *currentMessage, functionMessage)
+			agentCtx.Messages = append(agentCtx.Messages, agentCtx.CurrentMessage, functionMessage)
 
 			// Handle agent hand-off
 			if handoffCtx != nil {
-				if so.debug {
-					fmt.Printf("Debug: Agent hand-off from %s to %s\n",
-						streamCtx.Agent.Name, handoffCtx.TargetAgent.Name)
-				}
-
-				// Notify handler of agent transition
-				so.handler.OnAgentTransition(streamCtx.Agent, handoffCtx.TargetAgent, so.handoffMgr.GetDepth())
-
-				// Create fresh message context for handed-off agent with only the transfer data
-				var newMessages []llm.Message
-				if handoffCtx.TransferData != nil {
-					transferContent := fmt.Sprintf("%v", handoffCtx.TransferData)
-					newMessages = []llm.Message{
-						{
-							Role:    llm.RoleUser,
-							Content: transferContent,
-						},
-					}
-				}
-
-				// Create new stream context for handed-off agent with cleared context
-				newStreamCtx := &StreamContext{
-					Agent:             handoffCtx.TargetAgent,
-					Messages:          newMessages, // Fresh context with only transfer data
-					ContextVariables:  handoffCtx.ContextVariables,
-					HandoffDepth:      streamCtx.HandoffDepth + 1,
-					FunctionCallCount: streamCtx.FunctionCallCount,
-					ParentContext:     streamCtx,
-				}
-
-				// Process the handed-off agent (recursive call)
-				if err := so.ProcessStreamContext(ctx, newStreamCtx, modelOverride); err != nil {
-					// If handed-off agent errors, return error to original agent
-					if so.debug {
-						fmt.Printf("Debug: Handed-off agent error: %v\n", err)
-					}
-					return err
-				}
-
-				// Notify handler of agent return
-				so.handler.OnAgentReturn(handoffCtx.TargetAgent, streamCtx.Agent, so.handoffMgr.GetDepth())
-
-				if so.debug {
-					fmt.Printf("Debug: Returned from hand-off to %s\n", streamCtx.Agent.Name)
-				}
+				return handoffCtx, nil
 			}
 
 			// Reset current message for next response
-			*currentMessage = llm.Message{
+			agentCtx.CurrentMessage = llm.Message{
 				Role: llm.RoleAssistant,
-				Name: streamCtx.Agent.Name,
+				Name: agentCtx.Agent.Name,
 			}
+		}
+	}
+
+	return nil, nil
+}
+
+// handleAgentHandoff handles the logic for agent handoffs (stack manipulation)
+func (so *StreamOrchestrator) handleAgentHandoff(handoffCtx *HandoffContext, currentCtx *AgentContext) error {
+	// Check if the target agent is already in the stack (return to previous agent)
+	targetPosition := so.agentStack.FindAgentInStack(handoffCtx.TargetAgent)
+
+	if targetPosition >= 0 {
+		// Return to previous agent - pop back to that position
+		if so.debug {
+			fmt.Printf("Debug: Returning to previous agent %s at position %d\n",
+				handoffCtx.TargetAgent.Name, targetPosition)
+		}
+
+		// Add current response to the target agent's context
+		targetCtx := so.agentStack.contexts[targetPosition]
+
+		// Add the transfer data as a user message if present
+		if handoffCtx.TransferData != nil {
+			transferContent := fmt.Sprintf("%v", handoffCtx.TransferData)
+			targetCtx.Messages = append(targetCtx.Messages, llm.Message{
+				Role:    llm.RoleUser,
+				Content: transferContent,
+			})
+		}
+
+		// Update context variables
+		for k, v := range handoffCtx.ContextVariables {
+			targetCtx.ContextVariables[k] = v
+		}
+
+		// Pop all agents above the target
+		for so.agentStack.Depth() > targetPosition+1 {
+			poppedCtx := so.agentStack.Pop()
+			so.handler.OnAgentReturn(poppedCtx.Agent, targetCtx.Agent, so.agentStack.Depth())
+		}
+
+	} else {
+		// New agent handoff - push to stack
+		if so.debug {
+			fmt.Printf("Debug: Agent hand-off from %s to %s\n",
+				currentCtx.Agent.Name, handoffCtx.TargetAgent.Name)
+		}
+
+		// Check depth limits
+		if so.agentStack.Depth() >= so.agentStack.limits.MaxHandoffDepth {
+			so.handler.OnDepthLimitReached(so.agentStack.limits.MaxHandoffDepth)
+			return fmt.Errorf("maximum hand-off depth of %d reached", so.agentStack.limits.MaxHandoffDepth)
+		}
+
+		// Notify handler of agent transition
+		so.handler.OnAgentTransition(currentCtx.Agent, handoffCtx.TargetAgent, so.agentStack.Depth())
+
+		// Create fresh message context for handed-off agent with only the transfer data
+		var newMessages []llm.Message
+		if handoffCtx.TransferData != nil {
+			transferContent := fmt.Sprintf("%v", handoffCtx.TransferData)
+			newMessages = []llm.Message{
+				{
+					Role:    llm.RoleUser,
+					Content: transferContent,
+				},
+			}
+		}
+
+		// Determine model for new agent
+		model := handoffCtx.TargetAgent.Model
+		if currentCtx.Model != currentCtx.Agent.Model {
+			// Preserve model override if it was set
+			model = currentCtx.Model
+		}
+
+		// Create new agent context
+		newAgentCtx := &AgentContext{
+			Agent:            handoffCtx.TargetAgent,
+			Messages:         newMessages, // Fresh context with only transfer data
+			ContextVariables: handoffCtx.ContextVariables,
+			Model:            model,
+			CurrentMessage:   llm.Message{Role: llm.RoleAssistant, Name: handoffCtx.TargetAgent.Name},
+		}
+
+		// Push new agent to stack
+		if err := so.agentStack.Push(newAgentCtx); err != nil {
+			return err
 		}
 	}
 

@@ -120,15 +120,6 @@ func NewSwarmWithConfig(apiKey string, provider llm.LLMProvider, config *Config)
 		}
 	case llm.Claude:
 		client = llm.NewClaudeLLM(apiKey)
-	case llm.Ollama:
-		client, err = llm.NewOllamaLLM()
-		if err != nil {
-			log.Printf("Failed to create Ollama client: %v", err)
-			return &Swarm{
-				initialized: false,
-				config:      config,
-			}
-		}
 	case llm.DeepSeek:
 		client = llm.NewDeepSeekLLM(apiKey)
 	default:
